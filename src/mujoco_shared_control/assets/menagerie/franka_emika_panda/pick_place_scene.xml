@@ -1,0 +1,58 @@
+<mujoco model="Franka Panda pick and place">
+  <include file="mjx_panda.xml"/>
+
+  <option timestep="0.002" integrator="implicitfast" gravity="0 0 -9.81" cone="elliptic" impratio="10"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.25 0.25 0.25" specular="0.1 0.1 0.1"/>
+    <global offwidth="640" offheight="480" azimuth="135" elevation="-25"/>
+  </visual>
+
+  <statistic center="0.45 0 0.42" extent="1.2"/>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.78 0.86 0.94" rgb2="0.12 0.16 0.22" width="512" height="3072"/>
+    <texture type="2d" name="floor_tex" builtin="checker" rgb1="0.20 0.22 0.24" rgb2="0.14 0.16 0.18" width="256" height="256"/>
+    <material name="floor_mat" texture="floor_tex" texuniform="true" texrepeat="4 4" reflectance="0.08"/>
+    <material name="table_mat" rgba="0.48 0.51 0.55 1"/>
+    <material name="object_mat" rgba="0.90 0.22 0.14 1"/>
+    <material name="goal_mat" rgba="0.10 0.72 0.38 0.45"/>
+  </asset>
+
+  <worldbody>
+    <light name="key_light" pos="0.4 -0.3 1.8" dir="0.05 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>
+    <light name="fill_light" pos="1.0 0.8 1.2" dir="-0.5 -0.3 -1" directional="true" diffuse="0.35 0.38 0.42"/>
+
+    <geom name="floor" type="plane" size="2 2 0.05" material="floor_mat"/>
+
+    <body name="worktable" pos="0.48 0 0.20">
+      <geom name="table_top" type="box" size="0.42 0.46 0.02" material="table_mat" friction="1.0 0.005 0.0001"/>
+      <geom name="table_leg_front" type="box" pos="0.28 -0.31 -0.11" size="0.035 0.035 0.11" material="table_mat"/>
+      <geom name="table_leg_back" type="box" pos="0.28 0.31 -0.11" size="0.035 0.035 0.11" material="table_mat"/>
+      <geom name="table_leg_far_front" type="box" pos="-0.28 -0.31 -0.11" size="0.035 0.035 0.11" material="table_mat"/>
+      <geom name="table_leg_far_back" type="box" pos="-0.28 0.31 -0.11" size="0.035 0.035 0.11" material="table_mat"/>
+    </body>
+
+    <body name="object" pos="0.50 0 0.25">
+      <freejoint name="object_freejoint"/>
+      <geom name="object_geom" type="box" size="0.025 0.025 0.025" mass="0.08"
+            material="object_mat" friction="1.2 0.01 0.001" solref="0.004 1" solimp="0.95 0.99 0.001"/>
+      <site name="object_site" type="sphere" size="0.005" rgba="1 1 1 0"/>
+    </body>
+
+    <body name="goal" mocap="true" pos="0.55 -0.22 0.245">
+      <site name="goal_site" type="sphere" size="0.006" rgba="0.1 0.9 0.5 0"/>
+      <geom name="goal_zone" type="cylinder" pos="0 0 -0.0225" size="0.065 0.0025"
+            material="goal_mat" contype="0" conaffinity="0"/>
+    </body>
+
+    <camera name="front" pos="1.25 0 0.80"
+            xyaxes="0 1 0 -0.389 0 0.921" fovy="45"/>
+  </worldbody>
+
+  <keyframe>
+    <key name="home"
+         qpos="0 -0.785398 0 -2.35619 0 1.5708 0.785398 0.04 0.04 0.50 0 0.25 1 0 0 0"
+         ctrl="0 -0.785398 0 -2.35619 0 1.5708 0.785398 0.04"/>
+  </keyframe>
+</mujoco>

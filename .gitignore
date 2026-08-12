@@ -1,0 +1,40 @@
+# Generated datasets and validation runs
+datasets/
+*.h5
+*.hdf5
+*.inprogress.h5
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and package caches
+.venv/
+venv/
+.uv-cache/
+.cache/
+
+# Build products and generated experiment output
+build/
+install/
+log/
+outputs/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+tmp/
+temp/
+replay_outputs/
+determinism_outputs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

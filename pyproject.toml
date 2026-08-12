@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mujoco-shared-control"
+version = "0.1.0"
+description = "Standalone MuJoCo Franka Panda pick-and-place environment"
+requires-python = ">=3.10"
+dependencies = [
+  "example-robot-data>=5.0.0",
+  "gymnasium>=1.0,<2",
+  "h5py>=3.10,<4",
+  "mujoco>=3.3,<4",
+  "numpy>=1.24,<3",
+  "pillow>=10,<13",
+  "pin>=4.1.0",
+  "scipy>=1.10,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+rss2023 = ["torch>=2.2,<3"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mujoco_shared_control = ["assets/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
