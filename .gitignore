@@ -38,3 +38,8 @@ determinism_outputs/
 
 # OS
 .DS_Store
+# Compiled object files
+*.o
+
+# Ada Library Information
+*.ali
