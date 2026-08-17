@@ -839,3 +839,14 @@ The campaign keeps every failure, targets the requested number of clean
 successes, and executes exactly the requested number of perturbed episodes.
 Files are first written with an `.inprogress.h5` suffix and are atomically moved
 to `success/`, `recovered/`, `failure/`, or `invalid/` after validation.
+
+The formal 1300-episode collection is selected only through
+`manifests/rule_expert_v1_formal.json`. Rebuild it with:
+
+```bash
+.venv/bin/python scripts/build_rule_expert_manifest.py
+```
+
+Training code must use `ManifestActorDataset` or `ManifestCriticDataset` rather
+than recursively discovering HDF5 files. Both loaders accept `train` or
+`validation` and verify the manifest and per-file SHA-256 checksums by default.

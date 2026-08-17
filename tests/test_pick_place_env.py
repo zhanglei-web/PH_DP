@@ -133,3 +133,24 @@ def test_pinocchio_fk_and_ik_match_mujoco_gripper() -> None:
         assert result.orientation_error < 1e-3
     finally:
         env.close()
+
+
+def test_sac_reward_mode_preserves_gymnasium_terminal_split() -> None:
+    env = PickPlaceEnv(enable_camera=False, reward_version="sac_reward_v1")
+    try:
+        env.reset(seed=0, options={"randomize_object": False, "randomize_goal": False})
+        action = np.concatenate((env.home_joint_positions, [0.08]))
+        _, reward, terminated, truncated, info = env.step(action)
+        assert np.isfinite(reward)
+        assert not terminated and not truncated
+        assert info["reward_version"] == "sac_reward_v1"
+        assert set(info["reward_components"]) >= {"p1_progress", "reward_total"}
+
+        _, reward, terminated, truncated, info = env.step(
+            action, true_failure=True, failure_reason="ik_failure_limit"
+        )
+        assert terminated and not truncated
+        assert info["termination_reason"] == "ik_failure_limit"
+        assert info["reward_components"]["failure_terminal"] == -5.0
+    finally:
+        env.close()

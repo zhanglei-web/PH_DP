@@ -15,6 +15,14 @@ from mujoco_shared_control.robots.franka import FrankaRobot
 from mujoco_shared_control.sensors.camera import CameraCalibration, CameraSensor
 from mujoco_shared_control.sensors.observation import ObservationReader
 from mujoco_shared_control.tasks.pick_place import PickPlaceTask
+from mujoco_shared_control.tasks.sac_reward import (
+    SAC_REWARD_VERSION,
+    SACPickPlaceProtocol,
+)
+from mujoco_shared_control.tasks.sac_reward_v2 import (
+    SAC_REWARD_V2_CANDIDATE,
+    SACPickPlaceProtocolV2,
+)
 
 
 SCENE_PATH = (
@@ -53,12 +61,18 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         camera_width: int = 640,
         camera_height: int = 480,
         enable_camera: bool = True,
+        reward_version: str = "collection_reward_v1",
     ) -> None:
         super().__init__()
         if render_mode not in {None, *self.metadata["render_modes"]}:
             raise ValueError(f"Unsupported render_mode: {render_mode}")
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps
+        if reward_version not in {
+            "collection_reward_v1", SAC_REWARD_VERSION, SAC_REWARD_V2_CANDIDATE,
+        }:
+            raise ValueError(f"Unsupported reward_version: {reward_version}")
+        self.reward_version = reward_version
 
         self.model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
         self.data = mujoco.MjData(self.model)
@@ -75,6 +89,12 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         self.ik_controller = IKController(self.robot)
         self.observation_reader = ObservationReader(self.model, self.data, self.robot)
         self.task = PickPlaceTask()
+        if reward_version == SAC_REWARD_VERSION:
+            self.sac_task = SACPickPlaceProtocol()
+        elif reward_version == SAC_REWARD_V2_CANDIDATE:
+            self.sac_task = SACPickPlaceProtocolV2()
+        else:
+            self.sac_task = None
         self.camera = (
             CameraSensor(
                 self.model, self.data, width=camera_width, height=camera_height
@@ -112,6 +132,7 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         self._object_qpos_address = int(self.model.jnt_qposadr[self._object_joint_id])
         self._object_dof_address = int(self.model.jnt_dofadr[self._object_joint_id])
         self._episode_steps = 0
+        self._previous_observation: dict[str, Any] | None = None
         self._viewer = None
 
     def _build_observation_space(self) -> spaces.Dict:
@@ -209,6 +230,9 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         self._episode_steps = 0
 
         obs = self.get_observation()
+        if self.sac_task is not None:
+            self.sac_task.reset()
+        self._previous_observation = obs
         return obs, {
             "policy_obs": self.get_policy_observation(obs),
             "joint_metadata": self.robot.metadata,
@@ -280,7 +304,8 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         return value
 
     def step(
-        self, action: ArrayLike
+        self, action: ArrayLike, *, true_failure: bool = False,
+        failure_reason: str = "explicit_failure",
     ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         applied_action = self.joint_controller.apply(action)
         for _ in range(self.frame_skip):
@@ -288,8 +313,33 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         self._episode_steps += 1
 
         obs = self.get_observation()
-        reward, success, task_info = self.task.evaluate(obs)
         truncated = self._episode_steps >= self.max_episode_steps
+        if self.sac_task is None:
+            reward, success, task_info = self.task.evaluate(obs)
+            terminated = success
+        else:
+            if self._previous_observation is None:
+                raise RuntimeError("reset() must be called before step()")
+            reward_step = self.sac_task.step(
+                self._previous_observation, obs, time_limit=truncated,
+                true_failure=true_failure, failure_reason=failure_reason,
+            )
+            reward = reward_step.reward
+            terminated = reward_step.terminated
+            truncated = reward_step.truncated
+            task_info = {
+                "success": reward_step.termination_reason == "task_success",
+                "reward_version": self.reward_version,
+                "reward_components": reward_step.components.as_dict(),
+                "phase": int(reward_step.phase),
+                "phase_name": reward_step.phase.name,
+                "next_phase": int(reward_step.next_phase),
+                "next_phase_name": reward_step.next_phase.name,
+                "stable_grasp": reward_step.stable_grasp,
+                "successful_release": reward_step.successful_release,
+                "termination_reason": reward_step.termination_reason,
+            }
+        self._previous_observation = obs
         info = {
             **task_info,
             "applied_action": applied_action,
@@ -298,7 +348,7 @@ class PickPlaceEnv(gym.Env[dict[str, Any], NDArray[np.float64]]):
         }
         if self.render_mode == "human":
             self.render()
-        return obs, reward, success, truncated, info
+        return obs, reward, terminated, truncated, info
 
     def set_joint_position_target(self, q_cmd: ArrayLike) -> NDArray[np.float64]:
         return self.robot.set_joint_position_target(q_cmd)
