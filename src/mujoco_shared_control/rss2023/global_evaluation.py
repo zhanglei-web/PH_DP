@@ -20,8 +20,10 @@ from mujoco_shared_control.control.expert_command_adapter import ExpertCommandAd
 from mujoco_shared_control.envs.pick_place_env import PickPlaceEnv
 from mujoco_shared_control.experts.interfaces import ExpertActionSpec
 from mujoco_shared_control.rss2023.model import DiffusionConfig, RSS2023Diffusion
+from mujoco_shared_control.rss2023.action_postprocess import GlobalActionPostprocessor
 
 
+# Historical threshold used by the frozen Global evaluator.
 GRIPPER_OPEN_THRESHOLD = 0.375
 
 
@@ -57,6 +59,7 @@ class GlobalDiffusionPredictor:
         if self.observation_mean.shape != (43,) or self.action_mean.shape != (7,):
             raise ValueError("normalization dimensions are invalid")
         self.action_spec = ExpertActionSpec()
+        self.postprocessor = GlobalActionPostprocessor.from_expert_spec(self.action_spec)
         self.generator: torch.Generator | None = None
 
     def reset_sampling(self, seed: int) -> None:
@@ -135,7 +138,7 @@ def evaluate_episode(
             out_of_bounds_values += int(outside.sum())
             bounded = np.clip(raw_action, -1.0, 1.0)
             policy_clip_steps += int(not np.array_equal(raw_action, bounded))
-            # Preserve the verified binary execution semantics used by the expert.
+            # Preserve the historical binary gripper execution semantics.
             bounded[6] = -1.0 if bounded[6] < GRIPPER_OPEN_THRESHOLD else 1.0
             adapted = adapter.adapt(predictor.action_spec.denormalize(bounded))
             adapter_clip_steps += int(adapted.action_clipped)

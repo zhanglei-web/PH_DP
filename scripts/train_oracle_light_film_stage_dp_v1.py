@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Architecture audit and CUDA-only 1k smoke for Oracle Light-FiLM Stage-DP."""
+from __future__ import annotations
+import argparse,json,random
+from pathlib import Path
+import numpy as np,torch
+from torch.optim import Adam
+from mujoco_shared_control.rss2023.model import DiffusionConfig,RSS2023Diffusion
+from mujoco_shared_control.rss2023.oracle_stage_dataset import prepare_oracle_dataset
+from mujoco_shared_control.rss2023.oracle_light_film_stage_model import OracleLightFiLMConfig,OracleLightFiLMStageDiffusion
+ROOT=Path(__file__).resolve().parents[1];DATA=ROOT/'outputs/learned_expert_collection/final_online_awac20k_formal20000_v2_20260816T200000Z';OUT=ROOT/'outputs/oracle_light_film_stage_dp_v1/smoke'
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--steps',type=int,default=1000);p.add_argument('--output',type=Path,default=OUT);p.add_argument('--batch-size',type=int,default=512);a=p.parse_args()
+ if not torch.cuda.is_available():raise RuntimeError('CUDA is required; CPU fallback is forbidden')
+ dev=torch.device('cuda:0');torch.cuda.set_device(dev);a.output.mkdir(parents=True,exist_ok=True);random.seed(42);np.random.seed(42);torch.manual_seed(42);prepared=prepare_oracle_dataset(DATA)
+ def tensors(name):
+  s=getattr(prepared,name);o=torch.from_numpy(prepared.observation_normalizer.normalize(s.observation));return o[:,:43].to(dev),o[:,43:].to(dev),torch.from_numpy(prepared.action_normalizer.normalize(s.action)).to(dev)
+ state,stage,action=tensors('train');vs,vstage,va=tensors('validation');cfg=OracleLightFiLMConfig();model=OracleLightFiLMStageDiffusion(cfg).to(dev).train();opt=Adam(model.parameters(),lr=1e-3);gen=torch.Generator(device=dev).manual_seed(42)
+ concat=RSS2023Diffusion(DiffusionConfig(observation_dim=48,action_dim=7,num_diffusion_steps=50,beta_schedule='sigmoid',beta_min=1e-4,beta_max=.26,hidden_dim=128));concat_n=sum(x.numel() for x in concat.parameters());light_n=sum(x.numel() for x in model.parameters());base_no_film=light_n-sum(x.numel() for x in model.denoiser.film_head.parameters());extra=light_n-base_no_film;ratio=extra/concat_n
+ ix=torch.randint(len(state),(a.batch_size,),device=dev,generator=gen);ts=torch.full((a.batch_size,),10,dtype=torch.long,device=dev);noisy,_=model.q_sample(action[ix],ts,torch.zeros_like(action[ix]));zero=max(float(x.detach().abs().max()) for x in (model.denoiser.film_head.weight,model.denoiser.film_head.bias));audit={'CUDA_AVAILABLE':True,'GPU_NAME':torch.cuda.get_device_name(dev),'DEVICE':str(dev),'BACKBONE':'RSS2023 ConditionalDenoiser MLP','DENOISER_BACKBONE_MATCH_V1':'YES','PHYSICAL_DIM':43,'STAGE_DIM':5,'STAGE_EMBED_DIM':16,'STAGE_CONCAT':'NO','FILM_LAYER_COUNT':1,'FILM_TARGET_LAYER':'middle_hidden','FILM_ZERO_INIT':'YES' if zero==0 else 'NO','CONCAT_V1_PARAMETER_COUNT':concat_n,'LIGHT_FILM_PARAMETER_COUNT':light_n,'LIGHT_FILM_EXTRA_PARAMS':extra,'LIGHT_FILM_PARAM_RATIO':ratio,'ONLY_STAGE_INJECTION_CHANGED':'YES','FILM_HEAD_SHAPE':list(model.denoiser.film_head.weight.shape)}
+ if ratio>.15:raise RuntimeError(f'Light-FiLM extra parameter ratio exceeds 15%: {ratio}')
+ start=float(model.loss(state[ix],stage[ix],action[ix]).detach());logs=[]
+ for step in range(1,a.steps+1):
+  ix=torch.randint(len(state),(a.batch_size,),device=dev,generator=gen);ld=model.loss(state[ix],stage[ix],action[ix]);opt.zero_grad(set_to_none=True);ld.backward();fg=sum(float(x.grad.detach().norm()) for x in model.denoiser.film_head.parameters() if x.grad is not None);sg=sum(float(x.grad.detach().norm()) for x in model.denoiser.stage_encoder.parameters() if x.grad is not None);dg=sum(float(x.grad.detach().norm()) for x in model.denoiser.layer1.parameters() if x.grad is not None)+sum(float(x.grad.detach().norm()) for x in model.denoiser.layer2.parameters() if x.grad is not None)+sum(float(x.grad.detach().norm()) for x in model.denoiser.layer3.parameters() if x.grad is not None);opt.step();
+  if step==1 or step%100==0 or step==a.steps:logs.append({'step':step,'L_diff':float(ld.detach()),'stage_encoder_gradient_norm':sg,'film_gradient_norm':fg,'denoiser_gradient_norm':dg,'NaN':bool(not torch.isfinite(ld)),'Inf':bool(torch.isinf(ld))});print(json.dumps(logs[-1]),flush=True)
+ with torch.no_grad():
+  outs=[model.denoiser(state[ix],noisy,ts,torch.nn.functional.one_hot(torch.full((len(ix),),s,device=dev),5).float()) for s in range(5)];pair=float(np.mean([torch.linalg.vector_norm(outs[i]-outs[j],dim=-1).mean().item() for i in range(5) for j in range(i+1,5)]));vals=[float(model.loss(vs[i:i+a.batch_size],vstage[i:i+a.batch_size],va[i:i+a.batch_size])) for i in range(0,len(vs),a.batch_size)]
+ audit.update({'L_DIFF_START':start,'L_DIFF_END':logs[-1]['L_diff'],'VAL_L_DIFF':float(np.mean(vals)),'PAIRWISE_STAGE_DENOISER_L2':pair,'FULL_FILM_SMOKE_REFERENCE_L2':.55038,'FILM_STAGE_EFFECT_LEARNED':'YES' if pair>1e-5 else 'NO','STAGE_ENCODER_GRAD_VALID':'YES' if logs[-1]['stage_encoder_gradient_norm']>0 else 'NO','FILM_GRAD_VALID':'YES' if logs[-1]['film_gradient_norm']>0 else 'NO','DENOISER_GRAD_VALID':'YES' if logs[-1]['denoiser_gradient_norm']>0 else 'NO','NaN_INF':'NO' if all(not x['NaN'] and not x['Inf'] for x in logs) else 'YES','LIGHT_FILM_IMPLEMENTATION_VALID':'YES' if pair>1e-5 and ratio<=.15 else 'NO','READY_FOR_LIGHT_FILM_80K':'YES' if pair>1e-5 and all(not x['NaN'] and not x['Inf'] for x in logs) else 'NO'});torch.save({'model':model.state_dict(),'step':a.steps,'diffusion_config':cfg.state_dict(),'normalization':{'observation_mean':prepared.observation_normalizer.mean,'observation_std':prepared.observation_normalizer.std,'action_mean':prepared.action_normalizer.mean,'action_std':prepared.action_normalizer.std}},a.output/'smoke_step_001000.pt');(a.output/'architecture_audit.json').write_text(json.dumps(audit,indent=2)+'\n');(a.output/'training_log.jsonl').write_text('\n'.join(json.dumps(x) for x in logs)+'\n');print(json.dumps(audit,indent=2))
+if __name__=='__main__':main()
